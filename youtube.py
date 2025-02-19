@@ -7,10 +7,9 @@ from typing import List, Tuple, Optional
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from googleapiclient.http import BatchHttpRequest
 
 # If modifying these scopes, delete your previously saved token.pickle.
-SCOPES = ['https://www.googleapis.com/auth/youtube']
+SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl']
 
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
@@ -46,12 +45,15 @@ def extract_video_id(url: str) -> Optional[str]:
     Supports URLs in various formats.
     Returns the video ID as a string if found, otherwise None.
     """
+    # Check if URL contains a YouTube domain
+    youtube_domains = ('youtube.com', 'youtu.be', 'www.youtube.com', 'm.youtube.com')
+    if not any(domain in url.lower() for domain in youtube_domains):
+        return None
+
     # This regex looks for the video id pattern in typical YouTube URLs.
     pattern = r"(?:v=|\/)([0-9A-Za-z_-]{11})"
     match = re.search(pattern, url)
-    if match:
-        return match.group(1)
-    return None
+    return match.group(1) if match else None
 
 
 def get_playlists(youtube) -> List[Tuple[str, str]]:
@@ -125,19 +127,24 @@ def get_playlist_size(youtube, playlist_id: str) -> int:
         return 0
 
 
-def create_batch_request(youtube, playlist_id: str, video_id: str) -> BatchHttpRequest:
+def create_playlist_item(youtube, playlist_id: str, video_id: str):
     """
-    Create a batch request to add a video to a playlist.
+    Add a video to a playlist.
+    Returns the response if successful, None if failed.
     """
-    return youtube.playlistItems().insert(
-        part="snippet",
-        body={
-            "snippet": {
-                "playlistId": playlist_id,
-                "resourceId": {
-                    "kind": "youtube#video",
-                    "videoId": video_id
+    try:
+        return youtube.playlistItems().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {
+                        "kind": "youtube#video",
+                        "videoId": video_id
+                    }
                 }
             }
-        }
-    )
+        ).execute()
+    except Exception as e:
+        print(f"Error adding video {video_id}: {str(e)}")
+        return None

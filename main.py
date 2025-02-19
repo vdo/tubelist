@@ -9,8 +9,10 @@ from youtube import (
     get_video_details,
     get_playlist_size,
     extract_video_id,
-    create_batch_request
+    create_playlist_item
 )
+from googleapiclient.http import BatchHttpRequest
+
 
 # Initialize colorama
 init()
@@ -155,27 +157,21 @@ def main():
         bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.GREEN, Style.RESET_ALL)
     )
 
-    # Define a callback function to handle responses from batch calls.
-    def callback(request_id, response, exception):
-        nonlocal error_count
-        add_pbar.update(1)
-        if exception:
-            error_count += 1
-            log_error(f"Failed to add video {request_id}: {str(exception)}")
-        else:
-            video = response.get('snippet', {}).get('resourceId', {}).get('videoId')
-            log_success(f"Added video {video} to the playlist")
-
-    # Process video IDs in batches of 100 to avoid exceeding API limits.
-    batch_size = 100
+    error_count = 0
+    # Process video IDs in smaller batches to avoid rate limits
+    batch_size = 50
     for i in range(0, len(video_ids), batch_size):
-        batch = BatchHttpRequest(callback=callback)
         current_batch = video_ids[i:i + batch_size]
         log_info(f"Processing batch {i // batch_size + 1}: {len(current_batch)} video(s)")
+        
         for vid in current_batch:
-            request = create_batch_request(youtube, playlist_id, vid)
-            batch.add(request, request_id=vid)
-        batch.execute()
+            response = create_playlist_item(youtube, playlist_id, vid)
+            add_pbar.update(1)
+            
+            if response is None:
+                error_count += 1
+            else:
+                log_success(f"Added video {vid} to the playlist")
 
     add_pbar.close()
 
