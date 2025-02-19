@@ -42,8 +42,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Add YouTube links from a text file to an existing playlist.")
     parser.add_argument("txt_file", help="Text file containing YouTube links (one per line)")
-    parser.add_argument("--min-duration", type=int, help="Minimum video duration in seconds")
-    parser.add_argument("--max-duration", type=int, help="Maximum video duration in seconds")
+    parser.add_argument("--min-duration", type=float, help="Minimum video duration in minutes")
+    parser.add_argument("--max-duration", type=float, help="Maximum video duration in minutes")
     args = parser.parse_args()
 
     # Authenticate and build the YouTube service.
@@ -114,14 +114,15 @@ def main():
             validation_pbar.update(1)
             continue
 
-        if args.min_duration and duration < args.min_duration:
-            log_warning(f"Video {vid} is too short ({duration}s < {args.min_duration}s)")
+        duration_minutes = duration / 60
+        if args.min_duration and duration_minutes < args.min_duration:
+            log_warning(f"Video {vid} is too short ({duration_minutes:.1f}m < {args.min_duration}m)")
             skipped_count += 1
             validation_pbar.update(1)
             continue
 
-        if args.max_duration and duration > args.max_duration:
-            log_warning(f"Video {vid} is too long ({duration}s > {args.max_duration}s)")
+        if args.max_duration and duration_minutes > args.max_duration:
+            log_warning(f"Video {vid} is too long ({duration_minutes:.1f}m > {args.max_duration}m)")
             skipped_count += 1
             validation_pbar.update(1)
             continue
