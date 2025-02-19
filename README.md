@@ -29,37 +29,11 @@ pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib c
 # Basic usage
 python main.py your_links.txt
 
-# With duration filters (in seconds)
-python main.py your_links.txt --min-duration 60 --max-duration 3600
+# With duration filters (in minutes)
+python main.py your_links.txt --min-duration 1 --max-duration 30
 ```
 3. The script will:
    - Show a list of your YouTube playlists with their current video count
    - Let you choose which playlist to use
    - Verify each video's availability and duration
    - Add valid videos to the selected playlist
-
-## Features
-- Interactive playlist selection
-- Bulk video addition
-- Video validation:
-  - Checks if videos exist and are available
-  - Optional minimum and maximum duration filters
-  - Respects YouTube's 5000 videos per playlist limit
-- Handles various YouTube URL formats
-- Processes videos in batches to respect API limits
-- Error handling for invalid URLs
-- Detailed progress reporting
-
-## Requirements
-- Python 3.6+
-- Google API Python Client
-- Google Auth Library
-- OAuth2 Client
-- colorama
-- tqdm
-- A Google account with YouTube access
-
-## Limitations
-- Maximum 5000 videos per playlist (YouTube limitation)
-- Private videos cannot be added
-- Videos must be fully processed on YouTube to be added
