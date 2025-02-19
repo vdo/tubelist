@@ -2,7 +2,7 @@
 import os
 import pickle
 import re
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -74,41 +74,64 @@ def get_playlists(youtube) -> List[Tuple[str, str]]:
     return playlists
 
 
-def get_video_details(youtube, video_id: str) -> Tuple[bool, int]:
+def get_video_details(youtube, video_ids: List[str]) -> Dict[str, Tuple[bool, int]]:
     """
-    Get video details including existence and duration.
-    Returns tuple (exists, duration_seconds) or (False, 0) if video is unavailable.
+    Get video details including existence and duration for multiple videos.
+    Returns a dictionary mapping video_id to tuple (exists, duration_seconds).
+    Uses a single API call for up to 50 videos.
     """
-    try:
-        response = youtube.videos().list(
-            part="contentDetails,status",
-            id=video_id
-        ).execute()
-
-        if not response['items']:
-            return False, 0
-
-        video = response['items'][0]
-        
-        # Check if video is available
-        if video['status']['uploadStatus'] != 'processed' or \
-           video.get('status', {}).get('privacyStatus') == 'private':
-            return False, 0
-
-        # Convert duration from ISO 8601 format to seconds
-        duration = video['contentDetails']['duration']
-        duration_seconds = sum(
-            int(value) * multiplier 
-            for value, multiplier in zip(
-                map(lambda x: int(''.join(filter(str.isdigit, x or '0'))),
-                duration.replace('PT','').replace('H',':').replace('M',':').replace('S','').split(':')),
-                [3600, 60, 1]
+    results = {}
+    # Process in batches of 50 (API limit)
+    for i in range(0, len(video_ids), 50):
+        batch = video_ids[i:i + 50]
+        try:
+            request = youtube.videos().list(
+                part="contentDetails,status",
+                id=",".join(batch)
             )
-        )
-        
-        return True, duration_seconds
-    except Exception as e:
-        return False, 0
+            response = request.execute()
+            
+            # Create a mapping of found videos
+            found_videos = {
+                item['id']: (
+                    item['status']['uploadStatus'] == 'processed',
+                    parse_duration(item['contentDetails']['duration'])
+                )
+                for item in response.get('items', [])
+                if item['status']['uploadStatus'] == 'processed'
+            }
+            
+            # Add results, marking missing videos as unavailable
+            for vid in batch:
+                results[vid] = found_videos.get(vid, (False, 0))
+                
+        except Exception:
+            # If request fails, mark all videos in batch as unavailable
+            for vid in batch:
+                results[vid] = (False, 0)
+    
+    return results
+
+
+def parse_duration(duration: str) -> int:
+    """
+    Parse ISO 8601 duration format to seconds.
+    Example: PT1H2M10S -> 3730 seconds
+    """
+    match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
+    if not match:
+        return 0
+    
+    hours, minutes, seconds = match.groups()
+    total = 0
+    if hours:
+        total += int(hours) * 3600
+    if minutes:
+        total += int(minutes) * 60
+    if seconds:
+        total += int(seconds)
+    
+    return total
 
 
 def get_playlist_size(youtube, playlist_id: str) -> int:

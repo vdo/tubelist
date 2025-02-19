@@ -77,81 +77,82 @@ def main():
         except ValueError:
             log_error("Please enter a valid number")
 
-    # Read and parse the input file.
-    try:
-        with open(args.txt_file, "r", encoding="utf-8") as f:
-            links = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        log_error(f"Failed to read input file: {str(e)}")
+    # Get all video IDs first and remove duplicates
+    video_ids = []
+    seen_urls = set()
+    skipped_count = 0
+    
+    log_info("Reading and validating video URLs...")
+    with open(args.txt_file, 'r') as f:
+        for line in f:
+            url = line.strip()
+            if not url or url in seen_urls:
+                continue
+                
+            vid = extract_video_id(url)
+            if vid:
+                video_ids.append(vid)
+                seen_urls.add(url)
+
+    if not video_ids:
+        log_error("No valid YouTube URLs found in the file. Exiting.")
         return
 
-    total_links = len(links)
-    log_info(f"\nProcessing {total_links} links...")
+    log_info(f"Found {len(video_ids)} unique video URLs to process")
 
-    # Extract valid video IDs from the links and check their availability/duration
-    video_ids = []
-    skipped_count = 0
-    error_count = 0
-    
-    # Create progress bar for video validation
+    # Create progress bar for validation
     validation_pbar = tqdm(
-        total=total_links,
+        total=len(video_ids),
         desc="Validating videos",
         bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.BLUE, Style.RESET_ALL)
     )
 
-    for link in links:
-        vid = extract_video_id(link)
-        if not vid:
-            log_warning(f"Could not extract video ID from: {link}")
-            validation_pbar.update(1)
-            continue
+    # Get video details in batches
+    valid_video_ids = []
+    video_details = get_video_details(youtube, video_ids)
+    
+    for vid in video_ids:
+        exists, duration = video_details[vid]
+        validation_pbar.update(1)
 
-        exists, duration = get_video_details(youtube, vid)
         if not exists:
             log_warning(f"Video {vid} is unavailable or private")
             skipped_count += 1
-            validation_pbar.update(1)
             continue
 
         duration_minutes = duration / 60
         if args.min_duration and duration_minutes < args.min_duration:
             log_warning(f"Video {vid} is too short ({duration_minutes:.1f}m < {args.min_duration}m)")
             skipped_count += 1
-            validation_pbar.update(1)
             continue
 
         if args.max_duration and duration_minutes > args.max_duration:
             log_warning(f"Video {vid} is too long ({duration_minutes:.1f}m > {args.max_duration}m)")
             skipped_count += 1
-            validation_pbar.update(1)
             continue
 
-        video_ids.append(vid)
+        valid_video_ids.append(vid)
 
         # Check if adding this video would exceed the 5000 limit
-        if current_size + len(video_ids) > 5000:
+        if current_size + len(valid_video_ids) > 5000:
             log_warning(f"Can only add {5000 - current_size} more videos to reach YouTube's 5000 video limit")
-            video_ids = video_ids[:5000 - current_size]
-            validation_pbar.update(1)
+            valid_video_ids = valid_video_ids[:5000 - current_size]
             break
-
-        validation_pbar.update(1)
 
     validation_pbar.close()
 
-    if not video_ids:
+    if not valid_video_ids:
         log_error("No valid YouTube videos found. Exiting.")
         if skipped_count > 0:
             log_warning(f"Skipped {skipped_count} videos due to availability/duration constraints")
         return
 
-    log_success(f"\nFound {len(video_ids)} valid video(s)")
+    log_success(f"\nFound {len(valid_video_ids)} valid video(s)")
     if skipped_count > 0:
         log_warning(f"Skipped {skipped_count} videos due to availability/duration constraints")
 
     # Create progress bar for adding videos
-    total_valid_videos = len(video_ids)
+    total_valid_videos = len(valid_video_ids)
     add_pbar = tqdm(
         total=total_valid_videos,
         desc="Adding to playlist",
@@ -161,8 +162,8 @@ def main():
     error_count = 0
     # Process video IDs in smaller batches to avoid rate limits
     batch_size = 50
-    for i in range(0, len(video_ids), batch_size):
-        current_batch = video_ids[i:i + batch_size]
+    for i in range(0, len(valid_video_ids), batch_size):
+        current_batch = valid_video_ids[i:i + batch_size]
         log_info(f"Processing batch {i // batch_size + 1}: {len(current_batch)} video(s)")
         
         for vid in current_batch:
