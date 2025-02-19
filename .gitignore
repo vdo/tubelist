@@ -5,3 +5,4 @@ __pycache__/
 .vscode
 **/client_secrets.json
 **/token.pickle
+list.txt
