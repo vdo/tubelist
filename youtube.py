@@ -7,12 +7,18 @@ from typing import List, Tuple, Optional, Dict
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # If modifying these scopes, delete your previously saved token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/youtube.force-ssl']
 
 API_SERVICE_NAME = 'youtube'
 API_VERSION = 'v3'
+
+
+class QuotaExceededException(Exception):
+    """Exception raised when YouTube API quota is exceeded."""
+    pass
 
 
 def get_authenticated_service():
@@ -61,17 +67,22 @@ def get_playlists(youtube) -> List[Tuple[str, str]]:
     Get all playlists for the authenticated user.
     Returns a list of tuples containing (playlist_id, title).
     """
-    request = youtube.playlists().list(
-        part="snippet",
-        mine=True,
-        maxResults=50
-    )
-    response = request.execute()
-    
-    playlists = []
-    for item in response.get('items', []):
-        playlists.append((item['id'], item['snippet']['title']))
-    return playlists
+    try:
+        request = youtube.playlists().list(
+            part="snippet",
+            mine=True,
+            maxResults=50
+        )
+        response = request.execute()
+        
+        playlists = []
+        for item in response.get('items', []):
+            playlists.append((item['id'], item['snippet']['title']))
+        return playlists
+    except HttpError as e:
+        if "quota" in str(e).lower():
+            raise QuotaExceededException(str(e))
+        raise
 
 
 def get_video_details(youtube, video_ids: List[str]) -> Dict[str, Tuple[bool, int]]:
@@ -105,8 +116,10 @@ def get_video_details(youtube, video_ids: List[str]) -> Dict[str, Tuple[bool, in
             for vid in batch:
                 results[vid] = found_videos.get(vid, (False, 0))
                 
-        except Exception:
-            # If request fails, mark all videos in batch as unavailable
+        except HttpError as e:
+            if "quota" in str(e).lower():
+                raise QuotaExceededException(str(e))
+            # If request fails for other reasons, mark all videos in batch as unavailable
             for vid in batch:
                 results[vid] = (False, 0)
     
@@ -146,7 +159,9 @@ def get_playlist_size(youtube, playlist_id: str) -> int:
         )
         response = request.execute()
         return int(response['pageInfo']['totalResults'])
-    except Exception:
+    except HttpError as e:
+        if "quota" in str(e).lower():
+            raise QuotaExceededException(str(e))
         return 0
 
 
@@ -154,6 +169,7 @@ def create_playlist_item(youtube, playlist_id: str, video_id: str):
     """
     Add a video to a playlist.
     Returns the response if successful, None if failed.
+    Raises QuotaExceededException if the quota is exceeded.
     """
     try:
         return youtube.playlistItems().insert(
@@ -168,6 +184,13 @@ def create_playlist_item(youtube, playlist_id: str, video_id: str):
                 }
             }
         ).execute()
+    except HttpError as e:
+        error_str = str(e)
+        if "quota" in error_str.lower():
+            print(f"Error adding video {video_id}: {error_str}")
+            raise QuotaExceededException(error_str)
+        print(f"Error adding video {video_id}: {error_str}")
+        return None
     except Exception as e:
         print(f"Error adding video {video_id}: {str(e)}")
         return None
