@@ -14,6 +14,8 @@ from youtube import (
     get_playlist_size,
     extract_video_id,
     create_playlist_item,
+    video_exists_in_playlist,
+    get_playlist_video_ids,
     QuotaExceededException
 )
 from googleapiclient.http import BatchHttpRequest
@@ -152,7 +154,25 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
     )
 
     error_count = 0
+    duplicate_count = 0
     quota_exceeded = False
+    
+    # Get all existing video IDs in the playlist to avoid duplicates
+    try:
+        log_info("Fetching existing videos in the playlist to avoid duplicates...")
+        existing_video_ids = get_playlist_video_ids(youtube, playlist_id)
+        log_info(f"Found {len(existing_video_ids)} existing videos in the playlist")
+    except QuotaExceededException:
+        log_error("YouTube API quota exceeded while fetching existing videos.")
+        save_remaining_videos(valid_video_ids, playlist_id, 0, quota_exceeded=True)
+        wait_for_quota_reset(non_blocking=non_blocking)
+        # Re-authenticate and try again
+        youtube = get_authenticated_service()
+        existing_video_ids = get_playlist_video_ids(youtube, playlist_id)
+    except Exception as e:
+        log_warning(f"Could not fetch existing videos: {str(e)}")
+        log_warning("Will check for duplicates individually (less efficient)")
+        existing_video_ids = set()
     
     # Process video IDs in smaller batches to avoid rate limits
     batch_size = 50
@@ -165,6 +185,13 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
             wait_for_quota_reset(non_blocking=non_blocking)
             quota_exceeded = False
             youtube = get_authenticated_service()  # Re-authenticate after waiting
+            
+            # Refresh the list of existing videos after quota reset
+            try:
+                existing_video_ids = get_playlist_video_ids(youtube, playlist_id)
+            except Exception:
+                # If we can't refresh, continue with what we have
+                pass
         
         end_idx = min(i + batch_size, len(valid_video_ids))
         current_batch = valid_video_ids[i:end_idx]
@@ -172,12 +199,27 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
         
         for j, vid in enumerate(current_batch):
             try:
+                # Check if video already exists in the playlist
+                if vid in existing_video_ids:
+                    log_warning(f"Video {vid} already exists in the playlist - skipping")
+                    duplicate_count += 1
+                    add_pbar.update(1)
+                    continue
+                elif not existing_video_ids and video_exists_in_playlist(youtube, playlist_id, vid):
+                    # Fallback to individual check if bulk check failed
+                    log_warning(f"Video {vid} already exists in the playlist - skipping")
+                    duplicate_count += 1
+                    add_pbar.update(1)
+                    continue
+                
                 response = create_playlist_item(youtube, playlist_id, vid)
                 add_pbar.update(1)
                 
                 if response is None:
                     error_count += 1
                 else:
+                    # Add to our local cache of existing videos
+                    existing_video_ids.add(vid)
                     log_success(f"Added video {vid} to the playlist")
             
             except QuotaExceededException:
@@ -214,8 +256,13 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
 
     if error_count > 0:
         log_warning(f"\nCompleted with {error_count} errors. Some videos may not have been added.")
-    else:
-        log_success("\nAll videos were successfully added to the playlist!")
+    if duplicate_count > 0:
+        log_info(f"\nSkipped {duplicate_count} videos that were already in the playlist.")
+    
+    if error_count == 0 and duplicate_count < total_valid_videos:
+        log_success("\nAll new videos were successfully added to the playlist!")
+    elif duplicate_count == total_valid_videos:
+        log_warning("\nAll videos were already in the playlist. Nothing to add.")
 
 
 def main():
@@ -373,11 +420,32 @@ def main():
     # Get video details in batches
     valid_video_ids = []
     try:
+        # First, get all existing videos in the playlist to avoid duplicates
+        try:
+            log_info("Fetching existing videos in the playlist to avoid duplicates...")
+            existing_video_ids = get_playlist_video_ids(youtube, playlist_id)
+            log_info(f"Found {len(existing_video_ids)} existing videos in the playlist")
+        except QuotaExceededException:
+            raise  # Re-raise to be caught by the outer try-except
+        except Exception as e:
+            log_warning(f"Could not fetch existing videos: {str(e)}")
+            log_warning("Will validate all videos and check for duplicates later")
+            existing_video_ids = set()
+        
+        # Track duplicates found during validation
+        duplicate_count = 0
+        
         video_details = get_video_details(youtube, video_ids)
         
         for vid in video_ids:
             exists, duration = video_details[vid]
             validation_pbar.update(1)
+
+            # Skip if the video is already in the playlist
+            if existing_video_ids and vid in existing_video_ids:
+                log_warning(f"Video {vid} already exists in the playlist - skipping")
+                duplicate_count += 1
+                continue
 
             if not exists:
                 log_warning(f"Video {vid} is unavailable or private")
@@ -435,11 +503,15 @@ def main():
         log_error("No valid YouTube videos found. Exiting.")
         if skipped_count > 0:
             log_warning(f"Skipped {skipped_count} videos due to availability/duration constraints")
+        if duplicate_count > 0:
+            log_info(f"Skipped {duplicate_count} videos that were already in the playlist")
         return
 
-    log_success(f"\nFound {len(valid_video_ids)} valid video(s)")
+    log_success(f"\nFound {len(valid_video_ids)} valid video(s) to add")
     if skipped_count > 0:
         log_warning(f"Skipped {skipped_count} videos due to availability/duration constraints")
+    if duplicate_count > 0:
+        log_info(f"Skipped {duplicate_count} videos that were already in the playlist")
 
     # Process the videos with quota handling
     process_videos(youtube, valid_video_ids, playlist_id, non_blocking=args.non_blocking)

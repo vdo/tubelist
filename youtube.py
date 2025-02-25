@@ -165,6 +165,51 @@ def get_playlist_size(youtube, playlist_id: str) -> int:
         return 0
 
 
+def get_playlist_video_ids(youtube, playlist_id: str) -> set:
+    """
+    Get all video IDs that are currently in a playlist.
+    Returns a set of video IDs.
+    Raises QuotaExceededException if the quota is exceeded.
+    """
+    video_ids = set()
+    next_page_token = None
+    
+    try:
+        # Fetch all videos in the playlist, paginating as needed
+        while True:
+            request = youtube.playlistItems().list(
+                part="contentDetails",
+                playlistId=playlist_id,
+                maxResults=50,  # Maximum allowed by the API
+                pageToken=next_page_token
+            )
+            response = request.execute()
+            
+            # Extract video IDs from the response
+            for item in response.get('items', []):
+                video_id = item['contentDetails']['videoId']
+                video_ids.add(video_id)
+            
+            # Check if there are more pages
+            next_page_token = response.get('nextPageToken')
+            if not next_page_token:
+                break
+                
+        return video_ids
+        
+    except HttpError as e:
+        error_str = str(e)
+        if "quota" in error_str.lower():
+            print(f"Error fetching playlist videos: {error_str}")
+            raise QuotaExceededException(error_str)
+        # For other errors, return an empty set
+        print(f"Error fetching playlist videos: {error_str}")
+        return set()
+    except Exception as e:
+        print(f"Error fetching playlist videos: {str(e)}")
+        return set()
+
+
 def create_playlist_item(youtube, playlist_id: str, video_id: str):
     """
     Add a video to a playlist.
@@ -194,3 +239,34 @@ def create_playlist_item(youtube, playlist_id: str, video_id: str):
     except Exception as e:
         print(f"Error adding video {video_id}: {str(e)}")
         return None
+
+
+def video_exists_in_playlist(youtube, playlist_id: str, video_id: str) -> bool:
+    """
+    Check if a video already exists in a playlist.
+    Returns True if the video is already in the playlist, False otherwise.
+    Raises QuotaExceededException if the quota is exceeded.
+    """
+    try:
+        # Search for the video in the playlist
+        request = youtube.playlistItems().list(
+            part="snippet",
+            playlistId=playlist_id,
+            videoId=video_id,
+            maxResults=1
+        )
+        response = request.execute()
+        
+        # If there are items, the video exists in the playlist
+        return len(response.get('items', [])) > 0
+    except HttpError as e:
+        error_str = str(e)
+        if "quota" in error_str.lower():
+            print(f"Error checking if video {video_id} exists: {error_str}")
+            raise QuotaExceededException(error_str)
+        # For other errors, assume the video doesn't exist
+        print(f"Error checking if video {video_id} exists: {error_str}")
+        return False
+    except Exception as e:
+        print(f"Error checking if video {video_id} exists: {str(e)}")
+        return False
