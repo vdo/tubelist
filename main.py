@@ -49,20 +49,18 @@ def log_error(message):
     print(f"{Fore.RED}Error: {message}{Style.RESET_ALL}")
 
 
-def save_remaining_videos(videos, playlist_id, current_index=0, quota_exceeded=False):
+def save_remaining_videos(videos, playlist_id):
     """Save remaining videos to a temporary file"""
-    timestamp = datetime.now().isoformat()
-    if quota_exceeded:
-        timestamp += " quota_exceeded"
-        
+    timestamp = datetime.now().isoformat() + " quota_exceeded"
+    
     data = {
         "playlist_id": playlist_id,
-        "videos": videos[current_index:],
+        "videos": videos,
         "timestamp": timestamp
     }
     with open(TEMP_FILE, 'w') as f:
         json.dump(data, f)
-    log_info(f"Saved {len(videos) - current_index} remaining videos to {TEMP_FILE}")
+    log_info(f"Saved {len(videos)} remaining videos to {TEMP_FILE}")
 
 
 def load_remaining_videos():
@@ -142,15 +140,19 @@ def wait_for_quota_reset(timestamp=None, non_blocking=False):
         exit(0)
 
 
-def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blocking=False):
+def process_videos(youtube, valid_video_ids, playlist_id):
     """Process videos and handle quota limits"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--non-blocking", action="store_true")
+    args, _ = parser.parse_known_args()
+    non_blocking = args.non_blocking
+    
     # Create progress bar for adding videos
     total_valid_videos = len(valid_video_ids)
     add_pbar = tqdm(
         total=total_valid_videos,
         desc="Adding to playlist",
-        bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.GREEN, Style.RESET_ALL),
-        initial=start_index
+        bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.GREEN, Style.RESET_ALL)
     )
 
     error_count = 0
@@ -164,7 +166,7 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
         log_info(f"Found {len(existing_video_ids)} existing videos in the playlist")
     except QuotaExceededException:
         log_error("YouTube API quota exceeded while fetching existing videos.")
-        save_remaining_videos(valid_video_ids, playlist_id, 0, quota_exceeded=True)
+        save_remaining_videos(valid_video_ids, playlist_id)
         wait_for_quota_reset(non_blocking=non_blocking)
         # Re-authenticate and try again
         youtube = get_authenticated_service()
@@ -176,12 +178,12 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
     
     # Process video IDs in smaller batches to avoid rate limits
     batch_size = 50
-    i = start_index
+    i = 0
     
     while i < len(valid_video_ids):
         if quota_exceeded:
             # Save remaining videos and wait for quota reset
-            save_remaining_videos(valid_video_ids, playlist_id, i, quota_exceeded=True)
+            save_remaining_videos(valid_video_ids[i:], playlist_id)
             wait_for_quota_reset(non_blocking=non_blocking)
             quota_exceeded = False
             youtube = get_authenticated_service()  # Re-authenticate after waiting
@@ -225,8 +227,7 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
             except QuotaExceededException:
                 quota_exceeded = True
                 # Save progress at the current position
-                current_position = i + j
-                save_remaining_videos(valid_video_ids, playlist_id, current_position, quota_exceeded=True)
+                save_remaining_videos(valid_video_ids[i+j:], playlist_id)
                 add_pbar.close()
                 log_warning("YouTube API quota exceeded. Waiting for quota reset...")
                 wait_for_quota_reset(non_blocking=non_blocking)
@@ -237,11 +238,11 @@ def process_videos(youtube, valid_video_ids, playlist_id, start_index=0, non_blo
                     total=total_valid_videos,
                     desc="Adding to playlist",
                     bar_format="{l_bar}%s{bar}%s{r_bar}" % (Fore.GREEN, Style.RESET_ALL),
-                    initial=current_position
+                    initial=i+j
                 )
                 
                 # Continue from where we left off
-                i = current_position
+                i = i+j
                 break
         
         if not quota_exceeded:
@@ -313,28 +314,20 @@ def main():
             try:
                 # Test the API with a lightweight call to check if quota is available
                 get_playlist_size(youtube, saved_playlist_id)
-                process_videos(youtube, saved_videos, saved_playlist_id, non_blocking=args.non_blocking)
+                process_videos(youtube, saved_videos, saved_playlist_id)
                 return
             except QuotaExceededException as e:
                 log_error("YouTube API quota is currently exceeded.")
-                save_remaining_videos(saved_videos, saved_playlist_id, 0, quota_exceeded=True)
+                save_remaining_videos(saved_videos, saved_playlist_id)
                 wait_for_quota_reset(non_blocking=args.non_blocking)
                 # Re-authenticate and try again
                 youtube = get_authenticated_service()
-                process_videos(youtube, saved_videos, saved_playlist_id, non_blocking=args.non_blocking)
+                process_videos(youtube, saved_videos, saved_playlist_id)
                 return
         else:
             # Remove the temporary file if user doesn't want to resume
             os.remove(TEMP_FILE)
             log_info(f"Removed temporary file {TEMP_FILE}")
-    
-    parser = argparse.ArgumentParser(
-        description="Add YouTube links from a text file to an existing playlist.")
-    parser.add_argument("txt_file", help="Text file containing YouTube links (one per line)")
-    parser.add_argument("--min-duration", type=float, help="Minimum video duration in minutes")
-    parser.add_argument("--max-duration", type=float, help="Maximum video duration in minutes")
-    parser.add_argument("--non-blocking", action="store_true", help="Exit instead of waiting when quota is exceeded")
-    args = parser.parse_args()
 
     # Authenticate and build the YouTube service.
     youtube = get_authenticated_service()
@@ -480,7 +473,7 @@ def main():
         log_error("YouTube API quota exceeded during video validation.")
         # Save the videos we've already validated
         if valid_video_ids:
-            save_remaining_videos(valid_video_ids, playlist_id, 0, quota_exceeded=True)
+            save_remaining_videos(valid_video_ids, playlist_id)
             log_info(f"Saved {len(valid_video_ids)} validated videos for later processing")
         # Also save the remaining videos that need validation
         remaining_to_validate = [vid for vid in video_ids if vid not in valid_video_ids]
@@ -514,7 +507,7 @@ def main():
         log_info(f"Skipped {duplicate_count} videos that were already in the playlist")
 
     # Process the videos with quota handling
-    process_videos(youtube, valid_video_ids, playlist_id, non_blocking=args.non_blocking)
+    process_videos(youtube, valid_video_ids, playlist_id)
 
 
 if __name__ == "__main__":

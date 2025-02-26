@@ -200,7 +200,6 @@ def get_playlist_video_ids(youtube, playlist_id: str) -> set:
     except HttpError as e:
         error_str = str(e)
         if "quota" in error_str.lower():
-            print(f"Error fetching playlist videos: {error_str}")
             raise QuotaExceededException(error_str)
         # For other errors, return an empty set
         print(f"Error fetching playlist videos: {error_str}")
